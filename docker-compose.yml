@@ -1,0 +1,49 @@
+services:
+  grammar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lander-grammar:latest
+    container_name: lander-grammar
+    ports:
+      # 宿主端口可通过环境变量 HOST_PORT 配置，默认 8080。
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      SEAL_DIR: /data/seals
+    volumes:
+      - seals:/data/seals
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3); assert json.load(r)['status']=='ok'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  # 一次性验收：先跑文法引擎测试（镜像已由 build 阶段构建），
+  # 再对唯一 / 歧义 / 无消费环的 HTTP 场景冒烟；结束即退出，
+  # 退出码透传给宿主（全部通过为 0）。
+  verify:
+    image: lander-grammar:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["verify"]
+    depends_on:
+      grammar:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://grammar:8080
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "== [1/2] grammar engine unit tests =="
+        python -m unittest discover -s tests -v
+        echo "== [2/2] HTTP smoke: unique / ambiguous / non-consuming loop =="
+        python scripts/smoke_http.py
+        echo "== VERIFY PASSED =="
+
+volumes:
+  seals:
